@@ -50,17 +50,9 @@ const buildAllowedOrigins = () => {
 	const origins = new Set();
 	// Production frontend
 	origins.add('https://www.pons.solutions');
+	origins.add('https://pons.solutions');
 	// Dev frontend
 	origins.add('http://localhost:5173');
-	// Preferred single-origin override (for deployments)
-	if (process.env.FRONTEND_URL) origins.add(String(process.env.FRONTEND_URL).trim());
-	// Optional: comma-separated list for production.
-	// Example: https://app.yourdomain.com,https://admin.yourdomain.com
-	const extra = String(process.env.CORS_ORIGINS || '')
-		.split(',')
-		.map((s) => s.trim())
-		.filter(Boolean);
-	for (const o of extra) origins.add(o);
 	return origins;
 };
 
