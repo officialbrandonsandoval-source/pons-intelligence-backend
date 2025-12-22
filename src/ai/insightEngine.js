@@ -1,124 +1,200 @@
-const { Anthropic } = require('@anthropic-ai/sdk');
-const { logger } = require('../utils/logger');
-const { callWithRetry } = require('../utils/apiWrapper');
+// CORE INTELLIGENCE BRAIN (deterministic)
+//
+// Rules:
+// - No UI logic
+// - No console noise
+// - Deterministic outputs
+// - Pure functions (no network, no env)
+// - Structured JSON responses
+// - Optimized for voice explanation
+
 const { scoreLeads } = require('./intelligence/leadScoring');
-const { prioritizeDeals } = require('./intelligence/dealPrioritization');
+const { rankDeals } = require('./dealPrioritization');
 const { detectRevenueLeaks } = require('./intelligence/revenueLeakDetector');
-const { buildActionPlan } = require('./intelligence/actionRecommendations');
-const { getLeadIdentifier } = require('./intelligence/common');
+const { getLeadIdentifier, normalizeAmount } = require('./intelligence/common');
 
-const apiKey = process.env.ANTHROPIC_API_KEY;
-const model = 'claude-3-haiku-20240307';
-
-const client = apiKey ? new Anthropic({ apiKey }) : null;
-
-const parseJsonOrThrow = (text) => {
-	try {
-		return JSON.parse(text);
-	} catch (err) {
-		throw new Error('Invalid model response: expected JSON');
-	}
+const asDate = (d) => {
+	if (!d) return null;
+	const dt = d instanceof Date ? d : new Date(d);
+	return Number.isNaN(dt.getTime()) ? null : dt;
 };
 
-const ensureContract = (payload) => {
-	const base = payload || {};
-	const revenueLeaks = Array.isArray(base.revenueLeaks) ? base.revenueLeaks : [];
-	const priorities = Array.isArray(base.priorities) ? base.priorities : [];
-	const topAction = (base.topAction || '').trim();
-	const revenueImpact = base.revenueImpact || base.estimatedRevenueImpact || 'Unknown';
-	const priority = base.priority || base.priorityLevel || 'medium';
-	const supportingActions = Array.isArray(base.supportingActions) ? base.supportingActions : [];
-
-	if (revenueLeaks.length === 0 && priorities.length === 0) {
-		throw new Error('No priorities or revenue leaks were detected');
-	}
-
-	if (!topAction) {
-		throw new Error('topAction is required');
-	}
-
-	return {
-		revenueLeaks,
-		priorities,
-		topAction,
-		revenueImpact,
-		priority,
-		supportingActions,
-	};
+const daysBetween = (a, b) => {
+	const A = asDate(a);
+	const B = asDate(b);
+	if (!A || !B) return null;
+	const diffMs = B.getTime() - A.getTime();
+	return Math.floor(diffMs / (1000 * 60 * 60 * 24));
 };
 
-const buildFindings = (data) => {
-	if (!data || !Array.isArray(data.leads)) {
-		throw new Error('CRM data with leads is required');
-	}
-
-	const scoredLeads = scoreLeads(data.leads);
-	const prioritized = prioritizeDeals(scoredLeads);
-	const revenueLeaks = detectRevenueLeaks(scoredLeads);
-	const actionPlan = buildActionPlan(prioritized, revenueLeaks);
-
-	const priorities = prioritized.map((lead) => ({
-		id: getLeadIdentifier(lead),
-		name: lead.name || lead.company || getLeadIdentifier(lead),
-		score: lead.score,
-		amount: lead.amount,
-		stage: lead.stage,
-		lastContact: lead.lastContact || null,
-		daysSinceLastContact: lead.daysSinceLastContact ?? null,
-	}));
-
-	return {
-		revenueLeaks,
-		priorities,
-		topAction: actionPlan.topAction,
-		supportingActions: actionPlan.supportingActions,
-		revenueImpact: actionPlan.estimatedRevenueImpact,
-		priority: actionPlan.priorityLevel,
-	};
+const ensureNumber = (n, fallback = 0) => {
+	const x = Number(n);
+	return Number.isFinite(x) ? x : fallback;
 };
 
-const askAnthropicToFormat = async (findings) => {
-	const response = await callWithRetry(() =>
-		client.messages.create({
-			model,
-			temperature: 0,
-			max_tokens: 300,
-			messages: [
-				{
-					role: 'user',
-					content: `You are a revenue editor. Given deterministic findings, return ONLY JSON using the same schema. Do not add or remove items; only tighten wording for text fields. Keep arrays intact.\nFindings:\n${JSON.stringify(findings, null, 2)}`,
-				},
-			],
-		})
+const computeCashAtRisk = ({ deals = [], now }) => {
+	// cashAtRisk = deals stalled > 14 days with amount > 0
+	// "stalled" means no activity (lastActivityAt) in > 14 days relative to now.
+	const nowDate = asDate(now) || new Date();
+	let amount = 0;
+	let count = 0;
+	const dealIds = [];
+
+	for (const deal of deals || []) {
+		const dealAmount = ensureNumber(deal?.amount, 0);
+		if (!(dealAmount > 0)) continue;
+		const lastActivityAt = deal?.lastActivityAt;
+		const days = lastActivityAt ? daysBetween(lastActivityAt, nowDate) : null;
+		if (days === null) continue;
+		if (days <= 14) continue;
+		const id = deal?.id || getLeadIdentifier(deal);
+		dealIds.push(String(id));
+		count += 1;
+		amount += dealAmount;
+	}
+
+	return { amount, count, deals: dealIds };
+};
+
+const computeVelocity = ({ deals = [], now }) => {
+	// velocity = based on stage progression timestamps
+	//
+	// Assumption: normalized Deal may optionally include one of these fields:
+	// - stageHistory: [{ stage, at }]
+	// - stageChangedAt
+	// If stage progression timestamps are missing, we default to stable with explanation.
+	const nowDate = asDate(now) || new Date();
+	const msWeek = 7 * 24 * 60 * 60 * 1000;
+	const weekStart = new Date(nowDate.getTime() - msWeek);
+	const prevWeekStart = new Date(nowDate.getTime() - 2 * msWeek);
+
+	let progressedThisWeek = 0;
+	let progressedPrevWeek = 0;
+	let observed = 0;
+
+	for (const deal of deals || []) {
+		const history = Array.isArray(deal?.stageHistory) ? deal.stageHistory : null;
+		if (history && history.length) {
+			// Count a progression event if there are 2+ stages and the latest stage differs from the earliest.
+			const sorted = [...history]
+				.map((h) => ({ stage: h?.stage, at: asDate(h?.at) }))
+				.filter((h) => h.at)
+				.sort((a, b) => a.at.getTime() - b.at.getTime());
+			if (sorted.length < 2) continue;
+
+			observed += 1;
+			const stageChangedAt = sorted[sorted.length - 1].at;
+			const firstStage = String(sorted[0].stage || '');
+			const lastStage = String(sorted[sorted.length - 1].stage || '');
+			const progressed = firstStage && lastStage && firstStage !== lastStage;
+			if (!progressed) continue;
+
+			if (stageChangedAt >= weekStart) progressedThisWeek += 1;
+			else if (stageChangedAt >= prevWeekStart && stageChangedAt < weekStart) progressedPrevWeek += 1;
+			continue;
+		}
+
+		const changedAt = asDate(deal?.stageChangedAt);
+		if (!changedAt) continue;
+		observed += 1;
+		if (changedAt >= weekStart) progressedThisWeek += 1;
+		else if (changedAt >= prevWeekStart && changedAt < weekStart) progressedPrevWeek += 1;
+	}
+
+	if (observed === 0) {
+		return {
+			status: 'stable',
+			percentChange: 0,
+			explanation:
+				'No stage progression timestamps were provided, so velocity is reported as stable. Add stageHistory or stageChangedAt to enable true stage-based velocity.',
+		};
+	}
+
+	let percentChange = 0;
+	if (progressedPrevWeek === 0) {
+		percentChange = progressedThisWeek > 0 ? 100 : 0;
+	} else {
+		percentChange = Math.round(((progressedThisWeek - progressedPrevWeek) / progressedPrevWeek) * 100);
+	}
+
+	let status = 'stable';
+	if (percentChange >= 10) status = 'accelerating';
+	else if (percentChange <= -10) status = 'slowing';
+
+	const explanation =
+		status === 'accelerating'
+			? `Stage movement is up ${percentChange}% week-over-week.`
+			: status === 'slowing'
+				? `Stage movement is down ${Math.abs(percentChange)}% week-over-week.`
+				: 'Stage movement is steady week-over-week.';
+
+	return { status, percentChange, explanation };
+};
+
+const buildVoiceSummary = ({ cashAtRisk, velocity, nextBestAction }) => {
+	// 2–3 sentences, concise, direct.
+	const riskPart =
+		cashAtRisk.count > 0
+			? `Cash at risk is $${Math.round(cashAtRisk.amount).toLocaleString()} across ${cashAtRisk.count} stalled deals.`
+			: 'No stalled deals are currently flagged as cash at risk.';
+	const velocityPart = `Revenue velocity is ${velocity.status} (${velocity.percentChange}% week over week).`;
+	const actionPart = nextBestAction?.dealId
+		? `Next, ${nextBestAction.action} on deal ${nextBestAction.dealId}.`
+		: `Next, ${nextBestAction.action}.`;
+	return `${riskPart} ${velocityPart} ${actionPart}`.trim();
+};
+
+// Export a single async function: analyzeRevenue()
+const analyzeRevenue = async (input = {}) => {
+	const deals = Array.isArray(input?.deals) ? input.deals : [];
+	const now = input?.now ? input.now : undefined;
+
+	// Normalize deals into the internal lead scoring format.
+	// We reuse existing deterministic intelligence functions by mapping fields:
+	// - lastActivityAt -> lastActivityAt (already supported by common.getLastContact())
+	// - id/name/amount/stage preserved
+	// NOTE: probability/owner/source/createdAt/expectedCloseDate are carried through and ignored by scoring unless used later.
+	const scored = scoreLeads(
+		deals.map((d) => ({
+			...d,
+			// ensure amount normalization paths work
+			amount: ensureNumber(d?.amount, normalizeAmount(d)),
+			lastActivityAt: d?.lastActivityAt || null,
+		}))
 	);
 
-	const text = response?.content?.[0]?.text || '';
-	logger.debug('Anthropic revenue formatter received');
-	return parseJsonOrThrow(text.trim());
-};
+	// prioritizedDeals should be ranked by REAL revenue priority.
+	// We use the dedicated prioritization module which applies the formula:
+	// amount * probabilityMultiplier * velocityMultiplier * recencyMultiplier
+	const prioritizedDeals = rankDeals(deals, now ? new Date(now) : new Date());
 
-const analyzeRevenue = async (data) => {
-	const findings = buildFindings(data);
-	const contract = ensureContract(findings);
+	// Revenue leaks stay deterministic, and are computed from the scored view of deals.
+	const revenueLeaks = detectRevenueLeaks(scored);
 
-	if (!client) {
-		logger.warn('Anthropic client not configured; returning deterministic intelligence only');
-		return contract;
-	}
+	const cashAtRisk = computeCashAtRisk({ deals, now });
+	const velocity = computeVelocity({ deals, now });
 
-	try {
-		const formatted = await askAnthropicToFormat(contract);
-		const merged = ensureContract({
-			...contract,
-			...formatted,
-			revenueLeaks: formatted.revenueLeaks ?? contract.revenueLeaks,
-			priorities: formatted.priorities ?? contract.priorities,
-		});
-		return merged;
-	} catch (err) {
-		logger.warn('Anthropic formatting failed, returning deterministic contract', { error: err.message });
-		return contract;
-	}
+	// nextBestAction = highest ROI deal from prioritization
+	const top = prioritizedDeals[0];
+	const dealId = top ? String(top.dealId) : null;
+	const nextBestAction = {
+		dealId,
+		action: top ? top.recommendedAction : 'Review pipeline and create next-step commitments',
+		impact: top ? `Protect/advance $${Math.round(top.amount).toLocaleString()}` : 'Unknown',
+		reason: top ? top.explanation : 'No eligible deals were prioritized.',
+	};
+
+	const voiceSummary = buildVoiceSummary({ cashAtRisk, velocity, nextBestAction });
+
+	// Output (STRICT)
+	return {
+		cashAtRisk,
+		velocity,
+		nextBestAction,
+		prioritizedDeals,
+		revenueLeaks,
+		voiceSummary,
+	};
 };
 
 module.exports = { analyzeRevenue };

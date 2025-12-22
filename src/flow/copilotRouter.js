@@ -8,8 +8,6 @@ const { validateCRMData } = require('../utils/validate');
 const { getDeals } = require('../services/hubspot/deals');
 const { getToken, isTokenExpired, getGhlCredentials } = require('../services/tokenStore');
 
-const { buildCopilotMetrics } = require('../services/copilot/metrics');
-
 const router = express.Router();
 
 const buildGreeting = ({ userId, source }) => {
@@ -74,8 +72,53 @@ router.post('/copilot', authenticate, async (req, res) => {
 		const crmData = await fetchCrmData({ source: resolvedSource, userId, data });
 		validateCRMData(crmData);
 
-		const insight = await analyzeRevenue(crmData);
-		const metrics = buildCopilotMetrics({ crmData, insight });
+		// Bridge to the new insight engine contract (expects normalized deals)
+		const deals = (crmData?.leads || []).map((l) => ({
+			id: l.id || l.leadId || l.name,
+			name: l.name,
+			amount: l.amount,
+			stage: l.stage,
+			probability: l.probability,
+			lastActivityAt: l.lastActivityAt || l.lastContact || l.closeDate || l.closedate,
+			createdAt: l.createdAt,
+			expectedCloseDate: l.expectedCloseDate || l.closeDate || l.closedate,
+			owner: l.owner,
+			source: resolvedSource,
+		}));
+
+		const insight = await analyzeRevenue({ deals, now: new Date() });
+
+		// Copilot metrics are now first-class on the insight object; keep metrics.js for API stability.
+		const metrics = {
+			cashAtRisk: {
+				amount: insight.cashAtRisk.amount,
+				count: insight.cashAtRisk.count,
+			},
+			revenueVelocity: {
+				label:
+					insight.velocity.status === 'accelerating'
+						? 'Accelerating'
+						: insight.velocity.status === 'slowing'
+							? 'Slowing'
+							: 'Stable',
+				wowPercent: insight.velocity.percentChange,
+			},
+			nextBestAction: {
+				text: insight.nextBestAction.action,
+				impact: insight.nextBestAction.impact,
+				deal: (() => {
+					const top = Array.isArray(deals)
+						? deals.find((d) => String(d.id) === String(insight.nextBestAction.dealId))
+						: null;
+					return {
+						name: top?.name || 'Unknown',
+						amount: top?.amount ? Number(top.amount) : 0,
+						stage: top?.stage || null,
+						lastContactDays: null,
+					};
+				})(),
+			},
+		};
 
 		const greeting = buildGreeting({ userId, source: resolvedSource });
 		const answer = query && String(query).trim() ? String(query).trim() : '';
@@ -84,7 +127,7 @@ router.post('/copilot', authenticate, async (req, res) => {
 		// If a query is provided, we return a concise, deterministic response using the new 3-metric model.
 		let answerText = '';
 		if (answer) {
-			answerText = `${metrics.nextBestAction.text} Impact: ${metrics.nextBestAction.impact}. Cash at risk: $${metrics.cashAtRisk.amount} across ${metrics.cashAtRisk.count} deals. Velocity: ${metrics.revenueVelocity.label} (${metrics.revenueVelocity.wowPercent}% WoW).`;
+			answerText = insight.voiceSummary;
 		}
 
 		return res.json({

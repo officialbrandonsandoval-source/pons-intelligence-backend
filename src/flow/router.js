@@ -54,7 +54,24 @@ router.post('/command', authenticate, async (req, res) => {
     }
 
     validateCRMData(crmData);
-    const insight = await analyzeRevenue(crmData);
+
+    // Back-compat bridge:
+    // Existing connectors return { leads: [...] }. The new core brain expects { deals: [...] }.
+    // Until all connectors emit normalized Deal objects directly, we map leads -> deals here.
+    const deals = (crmData?.leads || []).map((l) => ({
+      id: l.id || l.leadId || l.name,
+      name: l.name,
+      amount: l.amount,
+      stage: l.stage,
+      probability: l.probability,
+      lastActivityAt: l.lastActivityAt || l.lastContact || l.closeDate || l.closedate,
+      createdAt: l.createdAt,
+      expectedCloseDate: l.expectedCloseDate || l.closeDate || l.closedate,
+      owner: l.owner,
+      source,
+    }));
+
+    const insight = await analyzeRevenue({ deals, now: new Date() });
     res.json({ insight });
   } catch (err) {
     logError(err, { endpoint: '/command' });
