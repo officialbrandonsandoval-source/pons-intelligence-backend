@@ -5,6 +5,7 @@ const rateLimiter = require('./middleware/rateLimiter');
 const router = require('./flow/router');
 const hubspotAuthRouter = require('./flow/hubspotAuth');
 const copilotRouter = require('./flow/copilotRouter');
+const intelligenceRouter = require('./flow/intelligenceRouter');
 const { logRequest } = require('./utils/logger');
 const voiceRouter = require('./flow/voiceRouter');
 
@@ -97,6 +98,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api', voiceRouter);
 app.use('/api', hubspotAuthRouter);
 app.use('/api', copilotRouter);
+app.use('/api', intelligenceRouter);
 app.use('/api', router);
 
 // Fallback error handler to keep errors consistent

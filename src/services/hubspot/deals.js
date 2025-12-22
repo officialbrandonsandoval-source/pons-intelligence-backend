@@ -26,10 +26,6 @@ const getDeals = async (token) => {
 		const results = dealsPage?.results || dealsPage?.body?.results || [];
 		const leads = normalizeDeals(results);
 
-		if (!leads.length) {
-			throw new Error('No deals found in HubSpot for this account');
-		}
-
 		return {
 			leads,
 			metadata: { source: 'hubspot', total: leads.length },
