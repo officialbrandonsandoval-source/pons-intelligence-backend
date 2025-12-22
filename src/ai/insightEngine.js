@@ -10,7 +10,7 @@
 
 const { scoreLeads } = require('./intelligence/leadScoring');
 const { rankDeals } = require('./dealPrioritization');
-const { detectRevenueLeaks } = require('./intelligence/revenueLeakDetector');
+const { detectRevenueLeaks } = require('./revenueLeakDetector');
 const { getLeadIdentifier, normalizeAmount } = require('./intelligence/common');
 
 const asDate = (d) => {

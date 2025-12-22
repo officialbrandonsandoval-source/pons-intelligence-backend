@@ -10,6 +10,7 @@ const assert = (cond, msg) => {
 };
 
 const { analyzeRevenue } = require('../src/ai/insightEngine');
+const { detectRevenueLeaks } = require('../src/ai/revenueLeakDetector');
 const { rankDeals } = require('../src/ai/dealPrioritization');
 
 const run = async () => {
@@ -60,6 +61,68 @@ const run = async () => {
 	assert(brain.nextBestAction && typeof brain.nextBestAction.action === 'string', 'nextBestAction.action should exist');
 	assert(Array.isArray(brain.prioritizedDeals), 'prioritizedDeals should be an array');
 	assert(Array.isArray(brain.revenueLeaks), 'revenueLeaks should be an array');
+
+	// Leak taxonomy + sorting sanity
+	{
+		const leakDeals = [
+			{
+				id: 'd-stalled',
+				name: 'Stalled',
+				amount: 20000,
+				stage: 'Qualified',
+				probability: 0.5,
+				lastActivityAt: new Date(now.getTime() - 20 * 24 * 60 * 60 * 1000).toISOString(),
+				stageChangedAt: new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000).toISOString(),
+			},
+			{
+				id: 'd-ghosted',
+				name: 'Ghosted late stage',
+				amount: 90000,
+				stage: 'Negotiation',
+				probability: 0.7,
+				lastActivityAt: new Date(now.getTime() - 12 * 24 * 60 * 60 * 1000).toISOString(),
+				stageChangedAt: new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000).toISOString(),
+			},
+			{
+				id: 'd-dead',
+				name: 'Dead lead',
+				amount: 5000,
+				stage: 'Prospecting',
+				probability: 0.1,
+				// no lastActivityAt, no stageChangedAt, no stageHistory
+			},
+			{
+				id: 'd-lowprob-high',
+				name: 'Low prob, high value',
+				amount: 120000,
+				stage: 'Discovery',
+				probability: 0.15,
+				lastActivityAt: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+				stageChangedAt: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+			},
+		];
+
+		const leaks = detectRevenueLeaks(leakDeals, now);
+		assert(leaks.length >= 3, 'expected at least 3 leaks');
+		const types = new Set(leaks.map((l) => l.type));
+		assert(types.has('STALLED_DEAL'), 'should detect STALLED_DEAL');
+		assert(types.has('GHOSTED'), 'should detect GHOSTED');
+		assert(types.has('DEAD_LEAD'), 'should detect DEAD_LEAD');
+		assert(types.has('LOW_PROB_HIGH_VALUE'), 'should detect LOW_PROB_HIGH_VALUE');
+
+		// Sorting: severity desc then amount desc
+		for (let i = 1; i < leaks.length; i++) {
+			const prev = leaks[i - 1];
+			const cur = leaks[i];
+			const rank = (s) => (s === 'high' ? 3 : s === 'medium' ? 2 : 1);
+			const prevRank = rank(prev.severity);
+			const curRank = rank(cur.severity);
+			assert(
+				prevRank > curRank || (prevRank === curRank && prev.amountAtRisk >= cur.amountAtRisk),
+				'leaks should be sorted by severity then amount'
+			);
+		}
+	}
 	assert(typeof brain.voiceSummary === 'string' && brain.voiceSummary.length > 10, 'voiceSummary should be a string');
 
 	// cashAtRisk rule: stalled > 14 days
