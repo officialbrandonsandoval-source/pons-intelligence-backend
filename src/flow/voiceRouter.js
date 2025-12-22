@@ -119,11 +119,30 @@ const voiceCommandHandler = async (req, res) => {
 	}
 };
 
+// Start (or resume) a voice session.
+// This is intentionally simple and deterministic: clients can call it to validate auth + CORS
+// and to receive a session id they can attach to subsequent voice requests.
+const voiceSessionStartHandler = async (req, res) => {
+	try {
+		// Match the production contract: { sessionId, status: 'ready' }
+		// Keep this endpoint lightweight so it never depends on CRM state.
+		const sessionId = `vs_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+		return res.json({ sessionId, status: 'ready' });
+	} catch (err) {
+		logError(err, { endpoint: '/voice/session/start' });
+		return res.status(400).json({ error: err.message || 'Voice session start failed' });
+	}
+};
+
 // Supports mounting under /api (preferred): POST /api/voice/command
 router.post('/voice/command', authenticate, upload.single('audio'), logVoiceRequest, voiceCommandHandler);
 // Also supports accidental double-prefix mounting: POST /api/api/voice/command
 // (kept for compatibility in case a client hardcodes /api/voice/command while router is mounted at /)
 router.post('/api/voice/command', authenticate, upload.single('audio'), logVoiceRequest, voiceCommandHandler);
+
+// Required by the production frontend: POST /api/voice/session/start
+router.post('/voice/session/start', authenticate, express.json(), logVoiceRequest, voiceSessionStartHandler);
+router.post('/api/voice/session/start', authenticate, express.json(), logVoiceRequest, voiceSessionStartHandler);
 
 router.post('/voice/speak', authenticate, express.json(), async (req, res) => {
 	try {

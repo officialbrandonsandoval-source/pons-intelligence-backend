@@ -55,93 +55,20 @@ const fetchCrmData = async ({ source, userId = 'dev', data }) => {
 	throw new Error('source must be "hubspot" or "gohighlevel"');
 };
 
+// Production-simple copilot endpoint.
+// Contract:
+// - Body: { query: string, source?: string, userId?: string }
+// - 400 if query missing
+// - 200 { response: string }
 router.post('/copilot', authenticate, async (req, res) => {
 	try {
-		const { source, userId = 'dev', query, mode = 'hybrid', data } = req.body || {};
-
-		const resolvedSource = source;
-		const resolvedMode = mode;
-		if (!resolvedSource) return res.status(400).json({ error: 'source is required' });
-		if (!['hubspot', 'gohighlevel'].includes(resolvedSource)) {
-			return res.status(400).json({ error: 'source must be "hubspot" or "gohighlevel"' });
-		}
-		if (!['silent', 'hybrid', 'voice'].includes(resolvedMode)) {
-			return res.status(400).json({ error: 'mode must be "silent", "hybrid", or "voice"' });
-		}
-
-		const crmData = await fetchCrmData({ source: resolvedSource, userId, data });
-		validateCRMData(crmData);
-
-		// Bridge to the new insight engine contract (expects normalized deals)
-		const deals = (crmData?.leads || []).map((l) => ({
-			id: l.id || l.leadId || l.name,
-			name: l.name,
-			amount: l.amount,
-			stage: l.stage,
-			probability: l.probability,
-			lastActivityAt: l.lastActivityAt || l.lastContact || l.closeDate || l.closedate,
-			createdAt: l.createdAt,
-			expectedCloseDate: l.expectedCloseDate || l.closeDate || l.closedate,
-			owner: l.owner,
-			source: resolvedSource,
-		}));
-
-		const insight = await analyzeRevenue({ deals, now: new Date() });
-
-		// Copilot metrics are now first-class on the insight object; keep metrics.js for API stability.
-		const metrics = {
-			cashAtRisk: {
-				amount: insight.cashAtRisk.amount,
-				count: insight.cashAtRisk.count,
-			},
-			revenueVelocity: {
-				label:
-					insight.velocity.status === 'accelerating'
-						? 'Accelerating'
-						: insight.velocity.status === 'slowing'
-							? 'Slowing'
-							: 'Stable',
-				wowPercent: insight.velocity.percentChange,
-			},
-			nextBestAction: {
-				text: insight.nextBestAction.action,
-				impact: insight.nextBestAction.impact,
-				deal: (() => {
-					const top = Array.isArray(deals)
-						? deals.find((d) => String(d.id) === String(insight.nextBestAction.dealId))
-						: null;
-					return {
-						name: top?.name || 'Unknown',
-						amount: top?.amount ? Number(top.amount) : 0,
-						stage: top?.stage || null,
-						lastContactDays: null,
-					};
-				})(),
-			},
-		};
-
-		const greeting = buildGreeting({ userId, source: resolvedSource });
-		const answer = query && String(query).trim() ? String(query).trim() : '';
-
-		// We are deliberately *not* using the LLM for reasoning here.
-		// If a query is provided, we return a concise, deterministic response using the new 3-metric model.
-		let answerText = '';
-		if (answer) {
-			answerText = insight.voiceSummary;
-		}
-
-		return res.json({
-			greeting,
-			metrics,
-			answer: answerText,
-			suggestedQuestions: suggestQuestions({ insight }),
-			rawInsight: insight,
-			// mode is accepted for the client experience, but the API response remains stable.
-			mode: resolvedMode,
-		});
+		const { query } = req.body || {};
+		const q = typeof query === 'string' ? query.trim() : '';
+		if (!q) return res.status(400).json({ error: 'query is required' });
+		return res.json({ response: `Received: ${q}` });
 	} catch (err) {
 		logError(err, { endpoint: '/copilot' });
-		return res.status(400).json({ error: err.message || 'Copilot request failed' });
+		return res.status(500).json({ error: err.message || 'Internal Server Error' });
 	}
 });
 

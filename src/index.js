@@ -86,7 +86,9 @@ app.use((req, res, next) => {
 	return next();
 });
 
+// Body parsing MUST happen before routes so JSON endpoints never fall through to HTML.
 app.use(express.json());
+
 app.use(rateLimiter);
 app.use(logRequest);
 
@@ -105,13 +107,23 @@ app.use('/api', copilotRouter);
 app.use('/api', intelligenceRouter);
 app.use('/api', router);
 
+// Requested mounts (compatibility):
+// Mount existing routers at the paths the frontend expects.
+// - /api/voice/session/start
+// - /api/copilot
+app.use('/api/voice', voiceRouter);
+app.use('/api/copilot', copilotRouter);
+
+// JSON 404 (never return HTML)
+app.use((req, res) => {
+	res.status(404).json({ error: 'Not Found', path: req.path });
+});
+
 // Fallback error handler to keep errors consistent
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
 	const status = err.status || 500;
-	res.status(status).json({
-		error: err.message || 'Internal Server Error',
-	});
+	res.status(status).json({ error: err.message || 'Internal Server Error' });
 });
 
 const port = process.env.PORT || 3000;

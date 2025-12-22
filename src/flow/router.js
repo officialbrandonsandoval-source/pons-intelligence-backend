@@ -4,7 +4,7 @@ const { analyzeRevenue } = require('../ai/insightEngine');
 const { validateCRMData } = require('../utils/validate');
 const { logError } = require('../utils/logger');
 const { getDeals } = require('../services/hubspot/deals');
-const { getToken, isTokenExpired, storeGhlCredentials } = require('../services/tokenStore');
+const { getToken, isTokenExpired, storeGhlCredentials, getGhlCredentials } = require('../services/tokenStore');
 
 const router = express.Router();
 
@@ -35,6 +35,20 @@ router.post('/auth/ghl', authenticate, (req, res) => {
   }
 });
 
+// GoHighLevel connection status.
+// GET /api/auth/ghl/status?userId=...
+router.get('/auth/ghl/status', authenticate, (req, res) => {
+  try {
+    const userId = String(req.query?.userId || '').trim();
+    if (!userId) return res.status(400).json({ error: 'userId is required' });
+    const connected = Boolean(getGhlCredentials(userId));
+    return res.json({ connected });
+  } catch (err) {
+    logError(err, { endpoint: '/auth/ghl/status' });
+    return res.status(500).json({ error: err.message || 'Internal Server Error' });
+  }
+});
+
 router.post('/command', authenticate, async (req, res) => {
   try {
     const { data, source, userId = 'dev' } = req.body;
@@ -52,6 +66,17 @@ router.post('/command', authenticate, async (req, res) => {
 
       crmData = await getDeals(token);
     }
+
+  if (source === 'gohighlevel') {
+    const creds = getGhlCredentials(userId);
+    if (!creds) {
+      return res.status(409).json({
+        error: 'gohighlevel_not_connected',
+        message: 'First POST /api/auth/ghl',
+      });
+    }
+    return res.status(400).json({ error: 'GoHighLevel deal fetch is not implemented yet in this backend' });
+  }
 
     validateCRMData(crmData);
 
