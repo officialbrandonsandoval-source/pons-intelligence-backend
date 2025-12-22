@@ -8,5 +8,5 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": []
+  "include": ["src/**/*.js", "scripts/**/*.js"]
 }
