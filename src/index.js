@@ -1,5 +1,6 @@
 require('dotenv').config();
 const express = require('express');
+const cors = require('cors');
 
 const rateLimiter = require('./middleware/rateLimiter');
 const router = require('./flow/router');
@@ -47,6 +48,8 @@ warnOnMissingEnv();
 
 const buildAllowedOrigins = () => {
 	const origins = new Set();
+	// Production frontend
+	origins.add('https://www.pons.solutions');
 	// Dev frontend
 	origins.add('http://localhost:5173');
 	// Preferred single-origin override (for deployments)
@@ -63,22 +66,31 @@ const buildAllowedOrigins = () => {
 
 const allowedOrigins = buildAllowedOrigins();
 
+// CORS (MUST run before all routes)
+// Requirements:
+// - Allow origin: https://www.pons.solutions
+// - Allow origin: http://localhost:5173
+// - Allow credentials
+// - Allow headers: Content-Type, Authorization, x-api-key
+// - Allow methods: GET, POST, PUT, DELETE, OPTIONS
+// - MUST respond to OPTIONS preflight with 200
+app.use(
+	cors({
+		origin(origin, cb) {
+			// Allow non-browser requests with no Origin header (health checks, server-to-server)
+			if (!origin) return cb(null, true);
+			return cb(null, allowedOrigins.has(origin));
+		},
+		credentials: true,
+		methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+		allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key'],
+		optionsSuccessStatus: 200,
+	})
+);
+// Note: Express 5 + path-to-regexp throws on `app.options('*', ...)`.
+// The cors middleware above already handles preflights; we also return 200 for OPTIONS below.
 app.use((req, res, next) => {
-	const origin = req.headers.origin;
-	if (origin && allowedOrigins.has(origin)) {
-		res.setHeader('Access-Control-Allow-Origin', origin);
-		res.setHeader('Vary', 'Origin');
-	}
-	res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-	res.setHeader(
-		'Access-Control-Allow-Headers',
-		'Content-Type, x-api-key, Authorization, Accept'
-	);
-	res.setHeader('Access-Control-Allow-Credentials', 'true');
-
-	if (req.method === 'OPTIONS') {
-		return res.status(204).end();
-	}
+	if (req.method === 'OPTIONS') return res.sendStatus(200);
 	return next();
 });
 
