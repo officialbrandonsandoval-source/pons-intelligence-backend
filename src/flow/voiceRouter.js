@@ -1,13 +1,29 @@
 const express = require('express');
 const multer = require('multer');
 const { authenticate } = require('../middleware/auth');
-const { logError } = require('../utils/logger');
+const { logError, logger } = require('../utils/logger');
 const { transcribeAudio } = require('../services/voice/speechToText');
 const { synthesizeSpeech } = require('../services/voice/textToSpeech');
 const copilotRouter = require('./copilotRouter');
 
 const upload = multer({ storage: multer.memoryStorage() });
 const router = express.Router();
+
+// Log incoming voice routes without ever logging audio blobs.
+// Required fields: method, path, userId, timestamp.
+const logVoiceRequest = (req, res, next) => {
+	const userId =
+		(req.body && typeof req.body.userId === 'string' && req.body.userId.trim())
+			? req.body.userId.trim()
+			: 'unknown';
+	logger.info('VOICE_REQUEST', {
+		method: req.method,
+		path: req.originalUrl,
+		userId,
+		timestamp: new Date().toISOString(),
+	});
+	return next();
+};
 
 const callCopilotInternally = (req, payload) =>
 	new Promise((resolve, reject) => {
@@ -104,10 +120,10 @@ const voiceCommandHandler = async (req, res) => {
 };
 
 // Supports mounting under /api (preferred): POST /api/voice/command
-router.post('/voice/command', authenticate, upload.single('audio'), voiceCommandHandler);
+router.post('/voice/command', authenticate, upload.single('audio'), logVoiceRequest, voiceCommandHandler);
 // Also supports accidental double-prefix mounting: POST /api/api/voice/command
 // (kept for compatibility in case a client hardcodes /api/voice/command while router is mounted at /)
-router.post('/api/voice/command', authenticate, upload.single('audio'), voiceCommandHandler);
+router.post('/api/voice/command', authenticate, upload.single('audio'), logVoiceRequest, voiceCommandHandler);
 
 router.post('/voice/speak', authenticate, express.json(), async (req, res) => {
 	try {
