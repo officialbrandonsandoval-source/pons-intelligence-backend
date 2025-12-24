@@ -1,12 +1,6 @@
 const express = require('express');
 
-const { authenticate } = require('../middleware/auth');
-const { analyzeRevenue } = require('../ai/insightEngine');
 const { logError } = require('../utils/logger');
-const { validateCRMData } = require('../utils/validate');
-
-const { getDeals } = require('../services/hubspot/deals');
-const { getToken, isTokenExpired, getGhlCredentials } = require('../services/tokenStore');
 
 const router = express.Router();
 
@@ -55,20 +49,25 @@ const fetchCrmData = async ({ source, userId = 'dev', data }) => {
 	throw new Error('source must be "hubspot" or "gohighlevel"');
 };
 
-// Production-simple copilot endpoint.
-// Contract:
-// - Body: { query: string, source?: string, userId?: string }
-// - 400 if query missing
-// - 200 { response: string }
-router.post('/copilot', authenticate, async (req, res) => {
+// Demo copilot endpoint.
+// Requirements:
+// - Accept JSON body: { query: string, source?: string, userId?: string }
+// - If query missing -> 400 JSON { error: "query_required" }
+// - Else 200 JSON { response: "Demo response. Intelligence engine coming next." }
+// - Must NEVER return HTML.
+//
+// NOTE: This is mounted at /api/copilot in src/index.js.
+router.post('/', express.json(), async (req, res) => {
 	try {
 		const { query } = req.body || {};
 		const q = typeof query === 'string' ? query.trim() : '';
-		if (!q) return res.status(400).json({ error: 'query is required' });
-		return res.json({ response: `Received: ${q}` });
+		if (!q) return res.status(400).json({ error: 'query_required' });
+		return res.status(200).json({
+			response: 'Demo response. Intelligence engine coming next.',
+		});
 	} catch (err) {
 		logError(err, { endpoint: '/copilot' });
-		return res.status(500).json({ error: err.message || 'Internal Server Error' });
+		return res.status(500).json({ error: 'Internal Server Error' });
 	}
 });
 

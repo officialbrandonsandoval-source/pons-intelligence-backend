@@ -8,7 +8,7 @@ const hubspotAuthRouter = require('./flow/hubspotAuth');
 const copilotRouter = require('./flow/copilotRouter');
 const intelligenceRouter = require('./flow/intelligenceRouter');
 const { logRequest } = require('./utils/logger');
-const voiceRouter = require('./flow/voiceRouter');
+const voiceRoutes = require('./routes/voice');
 const { analyzeRevenue } = require('./intelligence/insightEngine');
 
 const app = express();
@@ -89,20 +89,16 @@ app.use((req, res, next) => {
 
 // Body parsing MUST happen before routes so JSON endpoints never fall through to HTML.
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 
 app.use(rateLimiter);
 app.use(logRequest);
 
 // Health check should always return JSON (and should not be overridden by any frontend/dev server).
 app.get('/api/health', (req, res) => {
-	res.json({
-		status: 'ok',
-		service: 'pons-intelligence-backend',
-		timestamp: new Date().toISOString(),
-	});
+	res.json({ status: 'ok' });
 });
 
-app.use('/api', voiceRouter);
 app.use('/api', hubspotAuthRouter);
 app.use('/api', copilotRouter);
 app.use('/api', intelligenceRouter);
@@ -112,7 +108,7 @@ app.use('/api', router);
 // Mount existing routers at the paths the frontend expects.
 // - /api/voice/session/start
 // - /api/copilot
-app.use('/api/voice', voiceRouter);
+app.use('/api/voice', voiceRoutes);
 app.use('/api/copilot', copilotRouter);
 
 // Deterministic insight engine endpoint (no network calls)
@@ -138,8 +134,17 @@ app.use((req, res) => {
 // Fallback error handler to keep errors consistent
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-	const status = err.status || 500;
-	res.status(status).json({ error: err.message || 'Internal Server Error' });
+	const status = Number(err?.status || err?.statusCode || 500);
+	const message =
+		status >= 500
+			? 'Internal Server Error'
+			: err?.message || 'Request Error';
+
+	// Ensure we always return JSON (never the default Express HTML error page)
+	res.status(status).json({
+		error: message,
+		path: req.path,
+	});
 });
 
 const port = process.env.PORT || 3000;

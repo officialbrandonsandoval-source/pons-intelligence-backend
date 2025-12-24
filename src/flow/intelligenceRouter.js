@@ -37,8 +37,8 @@ const fetchCrmData = async ({ source, userId = 'dev', data }) => {
 	if (source === 'gohighlevel') {
 		const creds = getGhlCredentials(userId);
 		if (!creds) {
-			const err = new Error('GoHighLevel is not connected. First POST /api/auth/ghl');
-			err.status = 400;
+			const err = new Error('gohighlevel_not_connected');
+			err.status = 409;
 			throw err;
 		}
 

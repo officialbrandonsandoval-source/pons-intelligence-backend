@@ -1,5 +1,4 @@
 const express = require('express');
-const { authenticate } = require('../middleware/auth');
 const { analyzeRevenue } = require('../ai/insightEngine');
 const { validateCRMData } = require('../utils/validate');
 const { logError } = require('../utils/logger');
@@ -14,7 +13,7 @@ router.get('/health', (req, res) => {
 
 // GoHighLevel connection endpoint.
 // Kept intentionally simple: stores provided API key + location ID in-memory.
-router.post('/auth/ghl', authenticate, (req, res) => {
+router.post('/auth/ghl', (req, res) => {
   try {
     const { userId, apiKey, locationId } = req.body || {};
     if (!userId || typeof userId !== 'string' || !userId.trim()) {
@@ -37,7 +36,7 @@ router.post('/auth/ghl', authenticate, (req, res) => {
 
 // GoHighLevel connection status.
 // GET /api/auth/ghl/status?userId=...
-router.get('/auth/ghl/status', authenticate, (req, res) => {
+router.get('/auth/ghl/status', (req, res) => {
   try {
     const userId = String(req.query?.userId || '').trim();
     if (!userId) return res.status(400).json({ error: 'userId is required' });
@@ -49,7 +48,7 @@ router.get('/auth/ghl/status', authenticate, (req, res) => {
   }
 });
 
-router.post('/command', authenticate, async (req, res) => {
+router.post('/command', async (req, res) => {
   try {
     const { data, source, userId = 'dev' } = req.body;
     let crmData = data;
@@ -70,10 +69,7 @@ router.post('/command', authenticate, async (req, res) => {
   if (source === 'gohighlevel') {
     const creds = getGhlCredentials(userId);
     if (!creds) {
-      return res.status(409).json({
-        error: 'gohighlevel_not_connected',
-        message: 'First POST /api/auth/ghl',
-      });
+      return res.status(409).json({ error: 'gohighlevel_not_connected' });
     }
     return res.status(400).json({ error: 'GoHighLevel deal fetch is not implemented yet in this backend' });
   }
