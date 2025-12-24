@@ -53,10 +53,17 @@ const buildAllowedOrigins = () => {
 	// Production frontend
 	origins.add('https://www.pons.solutions');
 	origins.add('https://pons.solutions');
+	// Vercel (prod + previews) for pons-intelligence-dashboard
+	origins.add('https://pons-intelligence-dashboard.vercel.app');
 	return origins;
 };
 
 const allowedOrigins = buildAllowedOrigins();
+
+// Allow all Vercel preview deployments for this project:
+// https://pons-intelligence-dashboard-<hash>.vercel.app
+const vercelDashboardOriginRegex =
+	/^https:\/\/pons-intelligence-dashboard(-[a-z0-9-]+)?\.vercel\.app$/;
 
 // CORS (MUST run before all routes)
 // Requirements:
@@ -71,7 +78,13 @@ app.use(
 		origin(origin, cb) {
 			// Allow non-browser requests with no Origin header (health checks, server-to-server)
 			if (!origin) return cb(null, true);
-			return cb(null, allowedOrigins.has(origin));
+
+			const isAllowed =
+				allowedOrigins.has(origin) || vercelDashboardOriginRegex.test(origin);
+			if (!isAllowed) {
+				return cb(new Error(`CORS blocked for origin: ${origin}`));
+			}
+			return cb(null, true);
 		},
 		credentials: true,
 		methods: ['GET', 'POST', 'OPTIONS'],
