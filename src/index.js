@@ -9,6 +9,7 @@ const copilotRouter = require('./flow/copilotRouter');
 const intelligenceRouter = require('./flow/intelligenceRouter');
 const { logRequest } = require('./utils/logger');
 const voiceRouter = require('./flow/voiceRouter');
+const { analyzeRevenue } = require('./intelligence/insightEngine');
 
 const app = express();
 
@@ -113,6 +114,21 @@ app.use('/api', router);
 // - /api/copilot
 app.use('/api/voice', voiceRouter);
 app.use('/api/copilot', copilotRouter);
+
+// Deterministic insight engine endpoint (no network calls)
+// POST /api/insights { deals: [], now?: string }
+app.post('/api/insights', async (req, res, next) => {
+	try {
+		const { deals, now } = req.body || {};
+		if (!Array.isArray(deals)) {
+			return res.status(400).json({ error: 'deals must be an array' });
+		}
+		const out = await analyzeRevenue({ deals, now });
+		return res.json(out);
+	} catch (err) {
+		return next(err);
+	}
+});
 
 // JSON 404 (never return HTML)
 app.use((req, res) => {
