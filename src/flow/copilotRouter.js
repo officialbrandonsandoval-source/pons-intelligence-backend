@@ -1,74 +1,95 @@
 const express = require('express');
 
-const { logError } = require('../utils/logger');
+const { analyzeRevenue } = require('../intelligence/insightEngine');
+const { getToken, isTokenExpired, getGhlCredentials } = require('../services/tokenStore');
 
 const router = express.Router();
 
-const buildGreeting = ({ userId, source }) => {
-	const name = userId && userId !== 'dev' ? userId : 'there';
-	const src = source === 'hubspot' ? 'HubSpot' : 'GoHighLevel';
-	return `Hey ${name} — I’ve got your ${src} pipeline.`;
+const isCrmConnected = ({ userId = 'dev' } = {}) => {
+	const token = getToken(userId);
+	const hubspotConnected = !!token && !isTokenExpired(token);
+	const ghlConnected = !!getGhlCredentials(userId);
+	return hubspotConnected || ghlConnected;
 };
 
-const suggestQuestions = ({ insight }) => {
-	const topAction = (insight?.topAction || '').trim();
+const buildMockDeals = ({ nowIso }) => {
+	// Deterministic mocked deal set for demo mode when no CRM is connected.
+	// Keep timestamps stable via provided now.
+	const baseNow = typeof nowIso === 'string' ? nowIso : '2025-12-21T00:00:00.000Z';
 	return [
-		'Which deals are most at risk right now?',
-		topAction ? `How do I execute: “${topAction}”?` : 'What’s the single next best action?',
-		'What should I do today to increase close probability?',
+		{
+			id: 'mock-1',
+			name: 'Acme Logistics',
+			amount: 50000,
+			stage: 'proposal',
+			probability: 0.6,
+			lastActivityAt: baseNow,
+			stageChangedAt: '2025-12-15T00:00:00.000Z',
+			createdAt: '2025-11-01T00:00:00.000Z',
+		},
+		{
+			id: 'mock-2',
+			name: 'Globex Retail',
+			amount: 120000,
+			stage: 'negotiation',
+			probability: 0.75,
+			lastActivityAt: baseNow,
+			stageChangedAt: '2025-12-19T00:00:00.000Z',
+			createdAt: '2025-10-10T00:00:00.000Z',
+		},
+		{
+			id: 'mock-3',
+			name: 'Initech',
+			amount: 30000,
+			stage: 'discovery',
+			probability: 0.35,
+			lastActivityAt: baseNow,
+			stageChangedAt: '2025-12-02T00:00:00.000Z',
+			createdAt: '2025-11-20T00:00:00.000Z',
+		},
+		{
+			id: 'mock-4',
+			name: 'Umbrella Health',
+			amount: 80000,
+			stage: 'proposal',
+			probability: 0.5,
+			lastActivityAt: baseNow,
+			stageChangedAt: '2025-12-10T00:00:00.000Z',
+			createdAt: '2025-09-15T00:00:00.000Z',
+		},
 	];
 };
 
-const fetchCrmData = async ({ source, userId = 'dev', data }) => {
-	// If the caller provided data explicitly, trust it.
-	if (data) return data;
-
-	if (source === 'hubspot') {
-		const token = getToken(userId);
-		if (!token) {
-			throw new Error('HubSpot is not authorized. Start at /api/auth/hubspot');
-		}
-		if (isTokenExpired(token)) {
-			throw new Error('HubSpot token expired. Reconnect via /api/auth/hubspot');
-		}
-		return getDeals(token);
-	}
-
-	if (source === 'gohighlevel') {
-		// NOTE: We intentionally do not add any new deps or APIs here.
-		// This backend currently stores GHL credentials (apiKey + locationId) but does not yet
-		// implement a real GHL deals fetcher. When that fetcher is added, wire it here.
-		const creds = getGhlCredentials(userId);
-		if (!creds) {
-			throw new Error('GoHighLevel is not connected. First POST /api/auth/ghl');
-		}
-
-		throw new Error('GoHighLevel deal fetch is not implemented yet in this backend');
-	}
-
-	throw new Error('source must be "hubspot" or "gohighlevel"');
-};
-
-// Demo copilot endpoint.
-// Requirements:
-// - Accept JSON body: { query: string, source?: string, userId?: string }
-// - If query missing -> 400 JSON { error: "query_required" }
-// - Else 200 JSON { response: "Demo response. Intelligence engine coming next." }
-// - Must NEVER return HTML.
+// Demo contract:
+// POST /api/copilot
+// Body: { query: string, userId?: string, now?: ISOString }
+// Responses:
+// - 400 JSON { error: "query_required" } when query missing/blank
+// - 200 JSON { answer: string, structured: object }
+// Guarantees:
+// - deterministic (no AI calls)
+// - never returns HTML
 //
-// NOTE: This is mounted at /api/copilot in src/index.js.
-router.post('/', express.json(), async (req, res) => {
-	try {
-		const { query } = req.body || {};
-		const q = typeof query === 'string' ? query.trim() : '';
-		if (!q) return res.status(400).json({ error: 'query_required' });
-		return res.status(200).json({
-			response: 'Demo response. Intelligence engine coming next.',
+// NOTE: This router is mounted at /api/copilot in src/index.js.
+router.post('/', express.json(), (req, res) => {
+	const { query, userId = 'dev', now } = req.body || {};
+	const q = typeof query === 'string' ? query.trim() : '';
+	if (!q) return res.status(400).json({ error: 'query_required' });
+
+	// If no CRM is connected, fall back to mocked deals.
+	// (When CRM connectors exist, this can be expanded to fetch real deals.)
+	const deals = isCrmConnected({ userId }) ? [] : buildMockDeals({ nowIso: now });
+
+	// Deterministic analysis only.
+	// Note: If CRM is connected but we don't yet fetch real deals, analyzing [] is still safe/deterministic.
+	return Promise.resolve(analyzeRevenue({ deals, now }))
+		.then((structured) => {
+			const answer = typeof structured?.voiceSummary === 'string' ? structured.voiceSummary : '';
+			return res.status(200).json({ answer, structured });
+		})
+		.catch((err) => {
+			return res.status(500).json({ error: err?.message || 'copilot_failed' });
 		});
-	} catch (err) {
-		logError(err, { endpoint: '/copilot' });
-		return res.status(500).json({ error: 'Internal Server Error' });
-	}
 });
 
 module.exports = router;

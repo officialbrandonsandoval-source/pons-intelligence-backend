@@ -10,6 +10,7 @@ const intelligenceRouter = require('./flow/intelligenceRouter');
 const { logRequest } = require('./utils/logger');
 const voiceRoutes = require('./routes/voice');
 const { analyzeRevenue } = require('./intelligence/insightEngine');
+const { authenticate } = require('./middleware/auth');
 
 const app = express();
 
@@ -52,8 +53,6 @@ const buildAllowedOrigins = () => {
 	// Production frontend
 	origins.add('https://www.pons.solutions');
 	origins.add('https://pons.solutions');
-	// Dev frontend
-	origins.add('http://localhost:5173');
 	return origins;
 };
 
@@ -62,11 +61,11 @@ const allowedOrigins = buildAllowedOrigins();
 // CORS (MUST run before all routes)
 // Requirements:
 // - Allow origin: https://www.pons.solutions
-// - Allow origin: http://localhost:5173
+// - Allow origin: https://pons.solutions
 // - Allow credentials
 // - Allow headers: Content-Type, Authorization, x-api-key
-// - Allow methods: GET, POST, PUT, DELETE, OPTIONS
-// - MUST respond to OPTIONS preflight with 200
+// - Allow methods: GET, POST, OPTIONS
+// - MUST respond to OPTIONS preflight with 204
 app.use(
 	cors({
 		origin(origin, cb) {
@@ -75,15 +74,15 @@ app.use(
 			return cb(null, allowedOrigins.has(origin));
 		},
 		credentials: true,
-		methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+		methods: ['GET', 'POST', 'OPTIONS'],
 		allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key'],
-		optionsSuccessStatus: 200,
+		optionsSuccessStatus: 204,
 	})
 );
 // Note: Express 5 + path-to-regexp throws on `app.options('*', ...)`.
 // The cors middleware above already handles preflights; we also return 200 for OPTIONS below.
 app.use((req, res, next) => {
-	if (req.method === 'OPTIONS') return res.sendStatus(200);
+	if (req.method === 'OPTIONS') return res.sendStatus(204);
 	return next();
 });
 
@@ -96,7 +95,11 @@ app.use(logRequest);
 
 // Health check should always return JSON (and should not be overridden by any frontend/dev server).
 app.get('/api/health', (req, res) => {
-	res.json({ status: 'ok' });
+	// Demo contract:
+	// GET /api/health -> 200 JSON { status: "ok" }
+	// - synchronous
+	// - never returns HTML
+	return res.status(200).json({ status: 'ok' });
 });
 
 app.use('/api', hubspotAuthRouter);
@@ -113,7 +116,7 @@ app.use('/api/copilot', copilotRouter);
 
 // Deterministic insight engine endpoint (no network calls)
 // POST /api/insights { deals: [], now?: string }
-app.post('/api/insights', async (req, res, next) => {
+app.post('/api/insights', authenticate, async (req, res, next) => {
 	try {
 		const { deals, now } = req.body || {};
 		if (!Array.isArray(deals)) {

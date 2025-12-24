@@ -1,16 +1,18 @@
 /* eslint-disable no-console */
 
-// No-deps smoke test for POST /api/insights.
-// Purpose: lock the deterministic contract of the analyzeRevenue engine via the HTTP endpoint.
-//
-// Run:
-//   node scripts/insights.smoke.js
+// No-deps smoke test for POST /api/intelligence/analyze.
+// Contract:
+// - Protected by x-api-key
+// - Accepts JSON { deals: [], now?: ISOString }
+// - 400 if deals is not an array
+// - 200 on success
+// - Returns ONLY analyzeRevenue() output JSON
 
 const assert = (cond, msg) => {
 	if (!cond) throw new Error(`ASSERT: ${msg}`);
 };
 
-const requestJson = async ({ app, method, path, body }) => {
+const requestJson = async ({ app, method, path, body, headers }) => {
 	const server = app.listen(0);
 	try {
 		const { port } = server.address();
@@ -18,8 +20,7 @@ const requestJson = async ({ app, method, path, body }) => {
 			method,
 			headers: {
 				'content-type': 'application/json',
-				// This endpoint is protected; provide a valid key for contract testing.
-				'x-api-key': process.env.API_KEY || 'test_api_key',
+				...(headers || {}),
 			},
 			body: body ? JSON.stringify(body) : undefined,
 		});
@@ -33,19 +34,45 @@ const requestJson = async ({ app, method, path, body }) => {
 (async () => {
 	const app = require('../src/index');
 
-	// 1) Validation: missing deals array => 400
+	process.env.API_KEY = process.env.API_KEY || 'test_api_key';
+
+	// 1) Missing key -> 401
+	{
+		const { status } = await requestJson({
+			app,
+			method: 'POST',
+			path: '/api/intelligence/analyze',
+			body: { deals: [] },
+		});
+		assert(status === 401, `expected 401 without x-api-key, got ${status}`);
+	}
+
+	// 2) Wrong key -> 403
+	{
+		const { status } = await requestJson({
+			app,
+			method: 'POST',
+			path: '/api/intelligence/analyze',
+			body: { deals: [] },
+			headers: { 'x-api-key': 'wrong_key' },
+		});
+		assert(status === 403, `expected 403 with wrong x-api-key, got ${status}`);
+	}
+
+	// 3) Valid key but invalid payload -> 400
 	{
 		const { status, json } = await requestJson({
 			app,
 			method: 'POST',
-			path: '/api/insights',
+			path: '/api/intelligence/analyze',
 			body: { deals: 'nope' },
+			headers: { 'x-api-key': process.env.API_KEY },
 		});
-		assert(status === 400, 'expected 400 when deals is not an array');
+		assert(status === 400, `expected 400 when deals is not an array, got ${status}`);
 		assert(json?.error === 'deals must be an array', 'expected deals must be an array error');
 	}
 
-	// 2) Happy path: deterministic output keys exist
+	// 4) Happy path -> 200 and stable output keys
 	{
 		const deals = [
 			{
@@ -58,26 +85,17 @@ const requestJson = async ({ app, method, path, body }) => {
 				stageChangedAt: '2025-11-20T00:00:00.000Z',
 				createdAt: '2025-10-01T00:00:00.000Z',
 			},
-			{
-				id: 'd-2',
-				name: 'Globex',
-				amount: 120000,
-				stage: 'negotiation',
-				probability: 0.75,
-				lastActivityAt: '2025-12-20T00:00:00.000Z',
-				stageChangedAt: '2025-12-19T00:00:00.000Z',
-				createdAt: '2025-09-01T00:00:00.000Z',
-			},
 		];
 
 		const { status, json } = await requestJson({
 			app,
 			method: 'POST',
-			path: '/api/insights',
+			path: '/api/intelligence/analyze',
 			body: { deals, now: '2025-12-21T00:00:00.000Z' },
+			headers: { 'x-api-key': process.env.API_KEY },
 		});
 
-		assert(status === 200, 'expected 200 for valid insights call');
+		assert(status === 200, `expected 200 for valid analyze call, got ${status}`);
 		assert(json && typeof json === 'object', 'expected JSON object response');
 
 		// Contract keys from analyzeRevenue
@@ -96,9 +114,9 @@ const requestJson = async ({ app, method, path, body }) => {
 		assert(typeof json.voiceSummary === 'string', 'expected voiceSummary string');
 	}
 
-	console.log('insights.smoke: PASS');
+	console.log('intelligence.smoke: PASS');
 })().catch((err) => {
-	console.error('insights.smoke: FAIL');
+	console.error('intelligence.smoke: FAIL');
 	console.error(err);
 	process.exit(1);
 });
